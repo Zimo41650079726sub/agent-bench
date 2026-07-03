@@ -146,7 +146,7 @@ loop and evaluation infrastructure are never touched.
 agent-bench is free for everyone under the [Apache License 2.0](LICENSE).
 
 If your organization gets real value out of it at commercial scale (rough
-guide: annual revenue above ¥1B / ~$7M), please consider sponsoring the
+guide: annual revenue above ¥1B / ~$10M), please consider sponsoring the
 project's development. This is a request, not a license condition — nothing
 changes about your rights either way.
 
