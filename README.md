@@ -1,5 +1,7 @@
 # agent-bench
 
+English | [日本語](README.ja.md)
+
 **Find the smallest local LLM that can run your agent skill soundly, end to end.**
 agent-bench measures multi-step agentic ability with *deterministic* scoring only —
 exit codes, file first-appearance order, SHA256 hashes. No LLM judge, fully local,
@@ -61,14 +63,14 @@ UD-Q4_K_XL, qwen3.6-35b-a3b = Unsloth UD-Q6_K_XL, Gemma 4 = official
 GGUF releases (e4b/12b QAT, 26b-a4b instruct). Generated with
 `scripts/make_matrix.py`.
 
-| task | gemma-4-26b-a4b-it | gemma-4-e4b-it-qat | gemma-4-12b-qat | qwen3.5-4b | qwen3.6-35b-a3b |
-|---|---|---|---|---|---|
-| context_manage_v1 | ✅ pass^3 · 10.0t · 93s | ✅ pass^3 · 8.0t · 24s | ✅ pass^3 · 12.0t · 5.5m | ✅ pass^3 · 11.0t · 52s | ✅ pass^3 · 5.0t · 2.0m |
-| debug_python_v1 | ✅ pass^3 · 5.0t · 58s | ✅ pass^3 · 5.0t · 20s | ✅ pass^3 · 5.0t · 87s | ✗ 0.75 (k=3) · 16s | ✅ pass^3 · 4.0t · 53s |
-| skill_run_v1_imitate_dashboard | ✅ pass^1 · 3.0t · 7.8m | ✅ pass^1 · 3.0t · 7.8m | ✗ 0.20 (k=1) · 181.3m | ✅ pass^1 · 6.0t · 6.0m | ✅ pass^1 · 12.0t · 32.6m |
-| skill_run_v1_landing_page | ✅ pass^1 · 4.0t · 2.1m | ✗ 0.25 (k=3) · 4s | ✅ pass^1 · 5.0t · 2.7m | ✅ pass^1 · 6.0t · 94s | ✅ pass^1 · 4.0t · 4.5m |
-| skill_run_v1_report | ✅ pass^3 · 4.0t · 53s | ✅ pass^3 · 5.0t · 21s | ✅ pass^3 · 4.0t · 68s | ✅ pass^3 · 6.0t · 20s | ✅ pass^3 · 5.67t · 62s |
-| tdd_order_v1 | ✅ pass^3 · 4.0t · 74s | ✗ 0.67 (k=3) · 28s | ✅ pass^3 · 6.0t · 4.0m | ✅ pass^3 · 4.0t · 49s | ✅ pass^3 · 4.0t · 96s |
+| task | gemma-4-26b-a4b-it | gemma-4-e2b-it-qat | gemma-4-e4b-it-qat | gemma-4-12b-qat | qwen3.5-4b | qwen3.6-35b-a3b |
+|---|---|---|---|---|---|---|
+| context_manage_v1 | ✅ pass^3 · 10.0t · 93s | ✅ pass^3 · 11.0t · 51s | ✅ pass^3 · 8.0t · 24s | ✅ pass^3 · 12.0t · 5.5m | ✅ pass^3 · 11.0t · 52s | ✅ pass^3 · 5.0t · 2.0m |
+| debug_python_v1 | ✅ pass^3 · 5.0t · 58s | ✅ pass^3 · 4.0t · 15s | ✅ pass^3 · 5.0t · 20s | ✅ pass^3 · 5.0t · 87s | ✗ 0.75 (k=10) · 17s | ✅ pass^3 · 4.0t · 53s |
+| skill_run_v1_imitate_dashboard | ✅ pass^1 · 3.0t · 7.8m | ✅ pass^1 · 2.0t · 2.8m | ✅ pass^1 · 3.0t · 7.8m | ✗ 0.20 (k=1) · 181.3m | ✅ pass^1 · 6.0t · 6.0m | ✅ pass^1 · 12.0t · 32.6m |
+| skill_run_v1_landing_page | ✅ pass^1 · 4.0t · 2.1m | ✅ pass^1 · 5.0t · 39s | ✗ 0.25 (k=3) · 4s | ✅ pass^1 · 5.0t · 2.7m | ✅ pass^1 · 6.0t · 94s | ✅ pass^1 · 4.0t · 4.5m |
+| skill_run_v1_report | ✅ pass^3 · 4.0t · 53s | ✅ pass^3 · 5.0t · 14s | ✅ pass^3 · 5.0t · 21s | ✅ pass^3 · 4.0t · 68s | ✅ pass^3 · 6.0t · 20s | ✅ pass^3 · 5.67t · 62s |
+| tdd_order_v1 | ✅ pass^3 · 4.0t · 74s | ✗ 0.44 (k=3) · 25s | ✗ 0.67 (k=3) · 28s | ✅ pass^3 · 6.0t · 4.0m | ✅ pass^3 · 4.0t · 49s | ✅ pass^3 · 4.0t · 96s |
 
 `✅ pass^k · Nt · T` = all k trials passed, avg N turns, avg wall time per
 trial. `✗ S` = avg score S with at least one failed trial. Newest result
@@ -79,7 +81,7 @@ per (task, model).
 | tier | definition | models |
 |---|---|---|
 | 1 | **Full discipline** — every task passes, process flags included | gemma-4-26b-a4b-it (23.9m), qwen3.6-35b-a3b (53.7m) |
-| 2 | **Outcome-capable** — completes tasks but drops process flags (e.g. never observes the failure before fixing) | gemma-4-e4b-it-qat (12.6m), qwen3.5-4b (14.4m), gemma-4-12b-qat (220.4m) |
+| 2 | **Outcome-capable** — completes tasks but drops process flags (e.g. never observes the failure before fixing) | gemma-4-e2b-it-qat (8.7m), gemma-4-e4b-it-qat (12.6m), qwen3.5-4b (16.4m), gemma-4-12b-qat (220.4m) |
 | 3 | **Cannot drive tools** — the agentic loop itself does not run | — |
 
 Within each tier, models are ordered by total clear time (sum over benched
@@ -88,6 +90,12 @@ tasks, all trials).
 The interesting part is how *specific* and *reproducible* each failure is —
 capability is not monotonic in parameter count:
 
+- **gemma-4-e2b-it-qat (2B)** passes 5/6 tasks — including both artifact
+  skills that trip its larger siblings (the landing page e4b quits, the
+  dashboard 12b collapses on) — and is the fastest model on the board
+  (8.7 min total). Its single gap is pure TDD discipline: it writes the
+  test, then implements without ever running the test to observe it fail
+  (`red_observed` 0/3).
 - **gemma-4-12b-qat** passes 5/6 tasks but collapses on the dashboard task:
   when the HTML payload gets large, it stops emitting the `path` argument of
   `write_file` — 9 consecutive times, even right after correctly diagnosing
