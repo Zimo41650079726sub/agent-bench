@@ -141,6 +141,15 @@ Subclass `BenchTask` in `agent_bench/tasks/`, define `setup` / `get_prompt` /
 `skills` / `allowed_writes`, and register it in `tasks/__init__.py`. The run
 loop and evaluation infrastructure are never touched.
 
+## License & sponsorship
+
+agent-bench is free for everyone under the [Apache License 2.0](LICENSE).
+
+If your organization gets real value out of it at commercial scale (rough
+guide: annual revenue above ¥1B / ~$7M), please consider sponsoring the
+project's development. This is a request, not a license condition — nothing
+changes about your rights either way.
+
 ## Mounting your own skill
 
 Put a `bench_manifest.json` next to your skill's `SKILL.md` declaring
