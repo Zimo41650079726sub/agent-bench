@@ -9,9 +9,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import shlex
+import time
 import uuid
+from datetime import datetime
 
 CWD_MARKER = "__AGENT_BENCH_CWD__"
+
+# Every sandbox container carries this label so orphans (e.g. the harness
+# was SIGKILLed and its finally-based cleanup never ran) can be found and
+# removed later without touching anything else on the Docker host.
+SANDBOX_LABEL = "agent-bench.sandbox=1"
 
 
 class SandboxError(RuntimeError):
@@ -37,9 +44,14 @@ async def _run(argv: list[str], *, stdin: bytes | None = None,
 
 class StatefulSandbox:
     def __init__(self, image: str = "agent-bench:latest",
-                 command_timeout: float = 60.0):
+                 command_timeout: float = 60.0,
+                 mem_limit: str = "2g", cpus: float = 2.0,
+                 pids_limit: int = 256):
         self.image = image
         self.command_timeout = command_timeout
+        self.mem_limit = mem_limit
+        self.cpus = cpus
+        self.pids_limit = pids_limit
         self.container = f"agent-bench-{uuid.uuid4().hex[:12]}"
         self.cwd = "/workspace"
         self._started = False
@@ -49,9 +61,15 @@ class StatefulSandbox:
         # have identical size, and a fast rewrite can land in the same mtime
         # second — Python would then keep executing stale __pycache__
         # bytecode, corrupting ground-truth checks. No cache, no staleness.
+        #
+        # Resource caps: a model-written infinite loop or fork bomb must not
+        # take the host down. --memory-swap == --memory forbids swap growth.
         code, _, err = await _run([
             "docker", "run", "-d", "--name", self.container,
+            "--label", SANDBOX_LABEL,
             "-w", "/workspace", "--network", "none",
+            "--memory", self.mem_limit, "--memory-swap", self.mem_limit,
+            "--cpus", str(self.cpus), "--pids-limit", str(self.pids_limit),
             "-e", "PYTHONDONTWRITEBYTECODE=1",
             self.image, "sleep", "infinity",
         ], timeout=60)
@@ -161,3 +179,35 @@ class StatefulSandbox:
             return
         await _run(["docker", "rm", "-f", self.container], timeout=60)
         self._started = False
+
+
+async def sweep_orphans(max_age_hours: float = 24.0) -> int:
+    """Remove labeled sandbox containers older than max_age_hours.
+
+    finally-based cleanup cannot run when the harness dies from SIGKILL,
+    so orphaned `sleep infinity` containers accumulate. Called at CLI
+    startup. Age-gated so a concurrently running bench (trials can
+    legitimately run for hours) is never swept; orphans get collected by
+    the next startup after the grace period instead of immediately.
+    """
+    code, out, _ = await _run(
+        ["docker", "ps", "-aq", "--filter", f"label={SANDBOX_LABEL}"],
+        timeout=30)
+    if code != 0 or not out.strip():
+        return 0
+    removed = 0
+    now = time.time()
+    for cid in out.split():
+        code, created, _ = await _run(
+            ["docker", "inspect", "-f", "{{.Created}}", cid], timeout=30)
+        if code != 0:
+            continue
+        try:
+            born = datetime.fromisoformat(
+                created.strip().replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        if now - born > max_age_hours * 3600:
+            code, _, _ = await _run(["docker", "rm", "-f", cid], timeout=60)
+            removed += int(code == 0)
+    return removed

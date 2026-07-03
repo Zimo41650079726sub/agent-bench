@@ -17,6 +17,7 @@ import sys
 
 from agent_bench.adapters import HermesAdapter, OpenAIAdapter
 from agent_bench.runner import print_summary, run_pass_k
+from agent_bench.sandbox import sweep_orphans
 from agent_bench.schema import make_environment
 from agent_bench.tasks import BUILTIN_TASKS, TaskSkillDriven
 
@@ -97,6 +98,11 @@ def main() -> int:
         else:
             return
         print(line, flush=True)
+
+    swept = asyncio.run(sweep_orphans())
+    if swept:
+        print(f"[sweep] removed {swept} orphaned sandbox container(s) "
+              f"older than 24h", flush=True)
 
     summary = asyncio.run(run_pass_k(
         task, adapter_factory, k=args.k, image=args.image, model=args.model,
