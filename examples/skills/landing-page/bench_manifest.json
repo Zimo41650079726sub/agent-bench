@@ -1,0 +1,9 @@
+{
+  "id": "skill_run_v1_landing_page",
+  "goal": "Create a landing page for the product 'Aurora Coffee Roasters' (small-batch specialty coffee, ships within 48h of roasting) using the installed skill.",
+  "required_reads": ["skill/SKILL.md"],
+  "required_commands": [],
+  "expected_artifacts": ["output/index.html"],
+  "allowed_writes": ["output/*"],
+  "max_turns": 10
+}

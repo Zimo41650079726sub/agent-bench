@@ -1,0 +1,23 @@
+{
+  "id": "skill_run_v1_imitate_dashboard",
+  "goal": "Build a standings-simulator dashboard for the fictional football league 'NOVA LEAGUE 2027' (12 fictional club teams), in the exact design language of the reference page.",
+  "prompt_file": "SKILL.md",
+  "required_reads": ["skill/reference.html"],
+  "required_commands": [],
+  "expected_artifacts": ["output/index.html"],
+  "artifact_checks": [
+    {
+      "file": "output/index.html",
+      "contains": [
+        "NOVA LEAGUE",
+        "type=\"range\"",
+        "<select",
+        "tab-btn",
+        "<table",
+        ":root"
+      ]
+    }
+  ],
+  "allowed_writes": ["output/*"],
+  "max_turns": 12
+}

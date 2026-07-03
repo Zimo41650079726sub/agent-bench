@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<!-- Reference design: trimmed from the author's own "FIFA World Cup 2026
+     Simulator" (original work by the repository owner; JS and data removed,
+     structure and design language preserved for imitation benchmarks). -->
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FIFA World Cup 2026 Simulator</title>
+<style>
+  :root {
+    --night: #0A0E1A; --deep: #111827; --card: #1A2744; --card2: #162038;
+    --green: #00C853; --green-dim: #00963E; --gold: #FFD600;
+    --text: #E8EAF0; --muted: #7B8DB0; --border: #243056; --red: #FF4757;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--night); color: var(--text);
+         font-family: system-ui, sans-serif; min-height: 100vh; }
+
+  header { background: linear-gradient(180deg, #060912 0%, var(--night) 100%);
+           border-bottom: 1px solid var(--border); padding: 20px 24px;
+           display: flex; align-items: center; gap: 16px;
+           position: sticky; top: 0; z-index: 100; }
+  .logo-badge { background: var(--gold); color: #000; font-size: 13px;
+                letter-spacing: 1px; padding: 4px 8px; border-radius: 4px;
+                font-weight: 700; }
+  header h1 { font-size: clamp(20px, 4vw, 32px); letter-spacing: 2px; }
+  header h1 span { color: var(--gold); }
+  .header-sub { margin-left: auto; font-size: 12px; color: var(--muted);
+                text-align: right; line-height: 1.5; }
+
+  .container { max-width: 1280px; margin: 0 auto; padding: 24px 16px; }
+  .grid-2 { display: grid; grid-template-columns: 340px 1fr; gap: 20px;
+            align-items: start; }
+  @media(max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  .card { background: var(--card); border: 1px solid var(--border);
+          border-radius: 12px; overflow: hidden; }
+  .card-header { padding: 14px 18px; border-bottom: 1px solid var(--border);
+                 display: flex; align-items: center; gap: 8px; }
+  .card-header h2 { font-size: 16px; letter-spacing: 1.5px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .card-body { padding: 18px; }
+
+  .control-group { margin-bottom: 16px; }
+  .control-label { font-size: 11px; font-weight: 600; letter-spacing: 1px;
+                   color: var(--muted); text-transform: uppercase;
+                   margin-bottom: 6px; }
+  select, input[type=range] { width: 100%; background: var(--card2);
+    border: 1px solid var(--border); color: var(--text); padding: 9px 12px;
+    border-radius: 8px; font-size: 14px; cursor: pointer; }
+  input[type=range] { padding: 4px 0; accent-color: var(--green);
+                      border: none; background: transparent; }
+  .range-row { display: flex; justify-content: space-between; font-size: 12px;
+               color: var(--muted); margin-top: 4px; }
+  .range-val { color: var(--gold); font-weight: 700; font-size: 14px; }
+
+  .btn-run { width: 100%; border: none; border-radius: 8px; padding: 14px;
+    background: linear-gradient(135deg, var(--green) 0%, var(--green-dim) 100%);
+    color: #000; font-size: 18px; letter-spacing: 2px; font-weight: 700;
+    cursor: pointer; margin-top: 4px; }
+  .btn-run:hover { opacity: .9; }
+
+  .tab-bar { display: flex; border-bottom: 1px solid var(--border);
+             padding: 0 18px; background: var(--card2); }
+  .tab-btn { background: none; border: none; color: var(--muted);
+             font-size: 13px; font-weight: 500; padding: 12px 16px;
+             cursor: pointer; border-bottom: 2px solid transparent; }
+  .tab-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+  .tab-content { display: none; padding: 18px; }
+  .tab-content.active { display: block; }
+
+  .result-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .result-table th { text-align: left; padding: 8px 10px; color: var(--muted);
+    font-size: 11px; font-weight: 600; letter-spacing: .8px;
+    text-transform: uppercase; border-bottom: 1px solid var(--border); }
+  .result-table td { padding: 9px 10px;
+                     border-bottom: 1px solid rgba(36,48,86,.5); }
+  .result-table tr:hover td { background: rgba(255,255,255,.02); }
+  .mini-bar-bg { background: var(--card2); border-radius: 3px; height: 6px; }
+  .mini-bar-fill { height: 100%; border-radius: 3px; background: var(--green); }
+  .pct-text { font-size: 15px; color: var(--green); font-weight: 700; }
+
+  .groups-grid { display: grid; gap: 14px;
+                 grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .group-card { background: var(--card2); border: 1px solid var(--border);
+                border-radius: 8px; overflow: hidden; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo-badge">FIFA</div>
+  <h1>WORLD CUP <span>2026</span> SIMULATOR</h1>
+  <div class="header-sub">モンテカルロ法<br>48チーム対応</div>
+</header>
+
+<div class="container">
+  <div class="grid-2">
+    <aside>
+      <div class="card">
+        <div class="card-header"><div class="dot"></div><h2>シミュレーション設定</h2></div>
+        <div class="card-body">
+          <div class="control-group">
+            <div class="control-label">注目チーム</div>
+            <select><option>日本</option><option>ブラジル</option></select>
+          </div>
+          <div class="control-group">
+            <div class="control-label">ホームアドバンテージ補正</div>
+            <input type="range" min="0" max="300" step="50" value="100">
+            <div class="range-row"><span>なし</span>
+              <span class="range-val">+100 Elo</span><span>強め</span></div>
+          </div>
+          <div class="control-group">
+            <div class="control-label">ランダム性（アップセット係数）</div>
+            <input type="range" min="0.5" max="2.0" step="0.1" value="1.0">
+            <div class="range-row"><span>実力通り</span>
+              <span class="range-val">×1.0</span><span>波乱多め</span></div>
+          </div>
+          <div class="control-group">
+            <div class="control-label">シミュレーション回数</div>
+            <select><option>10,000回（精密）</option><option>1,000回</option></select>
+          </div>
+          <button class="btn-run">▶ シミュレーション開始</button>
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <div class="card">
+        <div class="tab-bar">
+          <button class="tab-btn active">優勝確率</button>
+          <button class="tab-btn">グループ</button>
+          <button class="tab-btn">ブラケット</button>
+          <button class="tab-btn">統計</button>
+        </div>
+        <div class="tab-content active">
+          <table class="result-table">
+            <tr><th>#</th><th>チーム</th><th>優勝確率</th><th></th></tr>
+            <tr><td>1</td><td>アルゼンチン</td>
+                <td class="pct-text">18.4%</td>
+                <td style="width:120px"><div class="mini-bar-bg">
+                  <div class="mini-bar-fill" style="width:92%"></div></div></td></tr>
+            <tr><td>2</td><td>フランス</td>
+                <td class="pct-text">15.1%</td>
+                <td><div class="mini-bar-bg">
+                  <div class="mini-bar-fill" style="width:76%"></div></div></td></tr>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

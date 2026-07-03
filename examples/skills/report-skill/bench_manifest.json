@@ -1,0 +1,12 @@
+{
+  "id": "skill_run_v1_report",
+  "goal": "Generate the daily report using the installed skill.",
+  "required_reads": ["skill/SKILL.md"],
+  "required_commands": ["make_report\\.sh\\s+.*--title\\s+\\S+"],
+  "expected_artifacts": ["output/report.txt"],
+  "allowed_writes": ["output/*"],
+  "max_turns": 10,
+  "stubs": {
+    "scripts/make_report.sh": {"outputs": ["output/report.txt"]}
+  }
+}

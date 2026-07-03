@@ -1,0 +1,2 @@
+# Core is stdlib-only. Nothing to install.
+# (The sandbox needs Docker; the target model needs any OpenAI-compatible server.)
