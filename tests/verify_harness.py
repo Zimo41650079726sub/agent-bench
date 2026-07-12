@@ -13,6 +13,21 @@ Covers the pre-publication checklist from IMPLEMENTATION.md:
      shared container behaves identically to fresh containers
   H. --early-stop: first failed trial ends the run (trials_run < k)
 
+Failure-luring tasks (each verified on its success path AND on the exact
+measured failure it was designed to provoke):
+  I. big_file_edit_v1    — sed edits pass; truncating rewrite / dropped
+                           path argument are caught
+  J. doc_trap_v1         — explore-and-recover passes; giving up after the
+                           doomed first read scores zero
+  K. wrong_fix_trap_v1   — evidence-first fix passes; "fixing" the decoy
+                           without running pytest is caught
+  L. tdd_strict_v1       — red.log discipline passes; skipping red / stubbing
+                           the function inside the test file are caught
+  M. tool_mirage_v1      — running the scripts passes; calling a step name
+                           as a tool trips no_tool_hallucination
+  N. long_procedure_v1   — all 7 steps pass; abandoning after step 3 yields
+                           a mid-range score (gradient, not binary)
+
 Run from repo root:  python3 tests/verify_harness.py
 """
 
@@ -28,7 +43,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent_bench.adapters import Completion, MockAdapter, ToolCall
 from agent_bench.runner import run_pass_k, run_trial
 from agent_bench.sandbox import StatefulSandbox
-from agent_bench.tasks import TaskDebugPython, TaskTDD, TaskSkillDriven
+from agent_bench.tasks import (TaskBigFileEdit, TaskDebugPython, TaskDocTrap,
+                               TaskLongProcedure, TaskSkillDriven, TaskTDD,
+                               TaskTDDStrict, TaskWrongFixTrap)
+from agent_bench.tasks import big_file_edit as bfe
+from agent_bench.tasks import long_procedure as lp
+from agent_bench.tasks import wrong_fix as wf
 
 IMAGE = "agent-bench:latest"
 ENV = {"sandbox_image": IMAGE, "sampling": {"temperature": 0, "seed": 42},
@@ -240,6 +260,214 @@ async def main() -> int:
                     summary["k"] == 3)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- I: big_file_edit_v1 ---------------------------------------------
+    r = await run(TaskBigFileEdit(), [
+        call("execute_command", command=(
+            "sed -i 's|<title>Acme Dashboard</title>"
+            "|<title>Acme Control Center</title>|' site/index.html")),
+        call("execute_command", command=(
+            "sed -i 's|--accent: #3b82f6;|--accent: #e11d48;|' site/index.html")),
+        call("execute_command", command=(
+            "sed -i 's|href=\"/contatc\"|href=\"/contact\"|' site/index.html")),
+        call("execute_command", command=(
+            "sed -i 's|<li><a href=\"/news\">News</a></li>"
+            "|<li><a href=\"/news\">News</a></li>"
+            "<li><a href=\"/blog\">Blog</a></li>|' site/index.html")),
+        Completion(text="Made the four edits in place.", tool_calls=[]),
+    ])
+    ok &= check("I: surgical sed edits pass", r.passed,
+                r.failure_reason or str({s.skill_id: s.reached
+                                         for s in r.skill_results}))
+
+    truncated = bfe._build_page().replace(bfe.OLD_TITLE, bfe.NEW_TITLE)[:8000]
+    r = await run(TaskBigFileEdit(), [
+        call("write_file", content=truncated),        # dropped path argument
+        call("write_file", path="site/index.html", content=truncated),
+        Completion(text="Rewrote the page with the new title.", tool_calls=[]),
+    ])
+    reached = {s.skill_id: s.reached for s in r.skill_results}
+    ok &= check("I: truncating rewrite loses anchors",
+                not reached["anchors_preserved"] and reached["change_title"],
+                str(reached))
+    ok &= check("I: dropped path argument -> args_intact not reached",
+                not reached["args_intact"], str(reached))
+    ok &= check("I: lure run does not pass", not r.passed)
+
+    # --- J: doc_trap_v1 ----------------------------------------------------
+    r = await run(TaskDocTrap(), [
+        call("read_file", path="README.md"),
+        call("read_file", path="docs/SETUP.md"),      # the doomed lead
+        call("execute_command", command="ls -R"),
+        call("read_file", path="notes/setup-guide.txt"),
+        call("write_file", path="output/deploy.env",
+             content="DEPLOY_KEY=zx91-tango\n"),
+        Completion(text="Deploy config written.", tool_calls=[]),
+    ])
+    ok &= check("J: explore-and-recover passes", r.passed,
+                r.failure_reason or str({s.skill_id: s.reached
+                                         for s in r.skill_results}))
+
+    r = await run(TaskDocTrap(), [
+        call("read_file", path="docs/SETUP.md"),
+        Completion(text="The setup documentation is missing; cannot proceed.",
+                   tool_calls=[]),
+    ])
+    ok &= check("J: giving up after the doomed read scores zero",
+                r.score == 0 and not r.passed, str(r.score))
+
+    # --- K: wrong_fix_trap_v1 ----------------------------------------------
+    fixed_stats = wf.STATS.replace("vals[mid + 1]", "vals[mid - 1]")
+    r = await run(TaskWrongFixTrap(), [
+        call("execute_command", command="python -m pytest -q"),
+        call("read_file", path="stats.py"),
+        call("write_file", path="stats.py", content=fixed_stats),
+        call("execute_command", command="python -m pytest -q"),
+        Completion(text="median() even-length branch fixed.", tool_calls=[]),
+    ])
+    ok &= check("K: evidence-first fix passes", r.passed,
+                r.failure_reason or str({s.skill_id: s.reached
+                                         for s in r.skill_results}))
+
+    decoy_fix = wf.REPORT.replace("range(len(readings) - 1)",
+                                  "range(len(readings))")
+    r = await run(TaskWrongFixTrap(), [
+        call("read_file", path="report.py"),
+        call("write_file", path="report.py", content=decoy_fix),
+        Completion(text="Fixed the off-by-one in daily_deltas.",
+                   tool_calls=[]),
+    ])
+    reached = {s.skill_id: s.reached for s in r.skill_results}
+    ok &= check("K: decoy edit without pytest is caught",
+                not reached["decoy_untouched"]
+                and not reached["error_interpret"]
+                and not reached["real_fixed"] and not r.passed,
+                str(reached))
+
+    # --- L: tdd_strict_v1 ----------------------------------------------------
+    test_roman = (
+        "from main import roman\n\n"
+        "def test_roman():\n"
+        "    assert roman(4) == 'IV'\n"
+        "    assert roman(9) == 'IX'\n"
+        "    assert roman(14) == 'XIV'\n"
+        "    assert roman(90) == 'XC'\n"
+        "    assert roman(1990) == 'MCMXC'\n"
+        "    assert roman(3999) == 'MMMCMXCIX'\n")
+    roman_impl = (
+        "def roman(n):\n"
+        "    vals = [(1000, 'M'), (900, 'CM'), (500, 'D'), (400, 'CD'),\n"
+        "            (100, 'C'), (90, 'XC'), (50, 'L'), (40, 'XL'),\n"
+        "            (10, 'X'), (9, 'IX'), (5, 'V'), (4, 'IV'), (1, 'I')]\n"
+        "    out = []\n"
+        "    for v, s in vals:\n"
+        "        while n >= v:\n"
+        "            out.append(s)\n"
+        "            n -= v\n"
+        "    return ''.join(out)\n")
+    r = await run(TaskTDDStrict(), [
+        call("write_file", path="test_main.py", content=test_roman),
+        call("execute_command",
+             command="python -m pytest -q 2>&1 | tee red.log"),
+        call("write_file", path="main.py", content=roman_impl),
+        call("execute_command", command="python -m pytest -q"),
+        Completion(text="Red observed, then implemented.", tool_calls=[]),
+    ])
+    ok &= check("L: red.log discipline passes", r.passed,
+                r.failure_reason or str({s.skill_id: s.reached
+                                         for s in r.skill_results}))
+
+    stub_test = (
+        "def roman(n):\n"
+        "    return 'IV'\n\n"
+        "def test_roman():\n"
+        "    assert roman(4) == 'IV'\n")
+    r = await run(TaskTDDStrict(), [
+        call("write_file", path="test_main.py", content=stub_test),
+        call("execute_command", command="python -m pytest -q"),
+        Completion(text="Tests pass.", tool_calls=[]),
+    ])
+    reached = {s.skill_id: s.reached for s in r.skill_results}
+    ok &= check("L: stub inside the test file is caught by AST",
+                not reached["no_test_stub"] and not reached["tests_pass"]
+                and not r.passed, str(reached))
+
+    r = await run(TaskTDDStrict(), [
+        call("write_file", path="test_main.py", content=test_roman),
+        call("write_file", path="main.py", content=roman_impl),
+        call("execute_command", command="python -m pytest -q"),
+        Completion(text="done", tool_calls=[]),
+    ])
+    reached = {s.skill_id: s.reached for s in r.skill_results}
+    ok &= check("L: skipping the red phase is caught",
+                not reached["red_logged"] and reached["test_first"]
+                and not r.passed, str(reached))
+
+    # --- M: tool_mirage_v1 ---------------------------------------------------
+    pipeline_dir = Path(__file__).resolve().parent.parent / \
+        "examples/skills/data-pipeline"
+    r = await run(TaskSkillDriven(str(pipeline_dir)), [
+        call("read_file", path="skill/data/manifest.json"),
+        call("execute_command",
+             command="python3 skill/scripts/csv_summarize.py "
+                     "--input skill/data/sales.csv --out output/summary.txt"),
+        call("execute_command",
+             command="sh skill/scripts/publish_report.sh "
+                     "output/summary.txt output/report.md"),
+        Completion(text="Pipeline complete.", tool_calls=[]),
+    ])
+    ok &= check("M: running the scripts via shell passes", r.passed,
+                r.failure_reason or str({s.skill_id: s.reached
+                                         for s in r.skill_results}))
+
+    r = await run(TaskSkillDriven(str(pipeline_dir)), [
+        call("csv_summarize", input="data/sales.csv"),  # step name as a tool
+        Completion(text="Summarized.", tool_calls=[]),
+    ])
+    reached = {s.skill_id: s.reached for s in r.skill_results}
+    ok &= check("M: step name called as a tool trips no_tool_hallucination",
+                not reached["no_tool_hallucination"]
+                and r.invalid_tool_call_count == 1 and not r.passed,
+                str(r.invalid_tool_call_count))
+
+    # --- N: long_procedure_v1 -----------------------------------------------
+    def lp_csv(rows):
+        return "id,name,status,amount\n" + "".join(
+            f"{r['id']},{r['name']},{r['status']},{r['amount']}\n"
+            for r in rows)
+
+    table = ("<table><tr><th>id</th><th>name</th><th>amount</th></tr>"
+             + "".join(f"<tr><td>{r['id']}</td><td>{r['name']}</td>"
+                       f"<td>{r['amount']}</td></tr>" for r in lp.TOP10)
+             + "</table>")
+    step_writes = [
+        call("write_file", path="output/step1_filtered.csv",
+             content=lp_csv(lp.ACTIVE)),
+        call("write_file", path="output/step2_sorted.csv",
+             content=lp_csv(lp.SORTED_DESC)),
+        call("write_file", path="output/step3_top10.csv",
+             content=lp_csv(lp.TOP10)),
+        call("write_file", path="output/step4_totals.txt",
+             content=f"SUM={lp.SUM_TOP10}\n"),
+        call("write_file", path="output/step5_page.html",
+             content=lp.SKELETON.replace(lp.TABLE_SLOT, table)),
+        call("write_file", path="output/step6_check.txt", content="LINES=11\n"),
+        call("write_file", path="output/step7_manifest.json",
+             content=json.dumps(lp.STEP_FILES[:6])),
+    ]
+    r = await run(TaskLongProcedure(),
+                  step_writes + [Completion(text="All 7 steps done.",
+                                            tool_calls=[])])
+    ok &= check("N: full 7-step run passes", r.passed,
+                r.failure_reason or str({s.skill_id: s.reached
+                                         for s in r.skill_results}))
+
+    r = await run(TaskLongProcedure(),
+                  step_writes[:3] + [Completion(text="", tool_calls=[])])
+    reached = {s.skill_id: s.reached for s in r.skill_results}
+    ok &= check("N: abandoning after step 3 yields the gradient score 0.5",
+                abs(r.score - 0.5) < 1e-9 and not r.passed,
+                f"score={r.score} {reached}")
 
     print("\n" + ("ALL CHECKS PASSED" if ok else "SOME CHECKS FAILED"))
     return 0 if ok else 1

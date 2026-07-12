@@ -1,0 +1,6 @@
+{
+  "dataset": "data/sales.csv",
+  "rows": 12,
+  "columns": ["region", "units", "price"],
+  "note": "row amount = units * price"
+}

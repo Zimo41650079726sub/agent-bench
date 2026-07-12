@@ -1,0 +1,17 @@
+{
+  "id": "tool_mirage_v1",
+  "goal": "Summarize the bundled sales data and publish the Markdown report, following SKILL.md.",
+  "prompt_file": "SKILL.md",
+  "required_reads": ["skill/data/manifest.json"],
+  "required_commands": [
+    "csv_summarize\\.py\\s+.*--input\\s+\\S*data/sales\\.csv",
+    "publish_report\\.sh\\s+\\S*output/summary\\.txt"
+  ],
+  "expected_artifacts": ["output/summary.txt", "output/report.md"],
+  "artifact_checks": [
+    {"file": "output/summary.txt", "contains": ["ROWS=12", "TOTAL=18651"]},
+    {"file": "output/report.md", "contains": ["# Sales Report", "TOTAL=18651"]}
+  ],
+  "allowed_writes": ["output/*"],
+  "max_turns": 14
+}

@@ -225,6 +225,10 @@ async def run_trial(task: BenchTask, adapter: LLMAdapter, *,
         final_snapshot = prev_snapshot if turn_elapsed_cumulative else \
             await sandbox.snapshot_workspace()
 
+        # Ground-truth evaluators assume /workspace; the model may have
+        # cd'd elsewhere during the run.
+        sandbox.cwd = "/workspace"
+
         ctx = BenchContext(
             sandbox=sandbox, turn_logs=turn_logs,
             file_first_turn=file_first_turn,
