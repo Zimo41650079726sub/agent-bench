@@ -28,10 +28,6 @@ class ToolCall:
 class Completion:
     text: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
-    # Raw `choices[0]` dict from the server, untouched (logprobs and all).
-    # RL trainers (e.g. ART) need the exact choice the model produced;
-    # rebuilding it from text/tool_calls risks tokenization drift.
-    raw_choice: dict | None = None
 
 
 class LLMAdapter(ABC):
@@ -77,8 +73,7 @@ class OpenAIAdapter(LLMAdapter):
             _post_json, f"{self.base_url}/chat/completions",
             payload, self.api_key, self.request_timeout,
         )
-        choice = data["choices"][0]
-        msg = choice["message"]
+        msg = data["choices"][0]["message"]
         calls = []
         for tc in msg.get("tool_calls") or []:
             raw = tc["function"].get("arguments") or "{}"
@@ -94,19 +89,12 @@ class OpenAIAdapter(LLMAdapter):
                 raw_arguments=raw,
                 arguments=args,
             ))
-        return Completion(text=msg.get("content"), tool_calls=calls,
-                          raw_choice=choice)
+        return Completion(text=msg.get("content"), tool_calls=calls)
 
 
 class HermesAdapter(OpenAIAdapter):
     """Parses Hermes-style inline tool calls when the server does not emit
-    structured tool_calls: <tool_call>{"name": ..., "arguments": {...}}</tool_call>
-
-    Note: when tool calls are reconstructed from inline XML, raw_choice still
-    holds the server's original message (content with <tool_call> tags, no
-    structured tool_calls) and thus disagrees with the parsed Completion.
-    For training pipelines that consume raw_choice (ART), prefer
-    OpenAIAdapter with a server that emits structured tool_calls."""
+    structured tool_calls: <tool_call>{"name": ..., "arguments": {...}}</tool_call>"""
 
     TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
@@ -130,8 +118,7 @@ class HermesAdapter(OpenAIAdapter):
             ))
         if calls:
             text = self.TOOL_CALL_RE.sub("", completion.text).strip() or None
-            return Completion(text=text, tool_calls=calls,
-                              raw_choice=completion.raw_choice)
+            return Completion(text=text, tool_calls=calls)
         return completion
 
 
@@ -145,21 +132,9 @@ class MockAdapter(LLMAdapter):
 
     async def complete(self, messages: list[dict], tools: list[dict]) -> Completion:
         if self.cursor >= len(self.script):
-            step = Completion(text="done", tool_calls=[])
-        else:
-            step = self.script[self.cursor]
-            self.cursor += 1
-        if step.raw_choice is None:
-            step.raw_choice = {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": step.text,
-                    "tool_calls": [tool_call_to_openai(tc)
-                                   for tc in step.tool_calls] or None,
-                },
-                "finish_reason": "tool_calls" if step.tool_calls else "stop",
-            }
+            return Completion(text="done", tool_calls=[])
+        step = self.script[self.cursor]
+        self.cursor += 1
         return step
 
 

@@ -111,8 +111,7 @@ async def run_trial(task: BenchTask, adapter: LLMAdapter, *,
                     image: str, trial_index: int, model: str,
                     environment: dict, command_timeout: float = 60.0,
                     on_event=None, export_dir: Path | None = None,
-                    export_rel: str | None = None,
-                    capture_messages: bool = False) -> BenchResult:
+                    export_rel: str | None = None) -> BenchResult:
     def emit(**ev):
         if on_event:
             on_event({"trial": trial_index, **ev})
@@ -126,9 +125,6 @@ async def run_trial(task: BenchTask, adapter: LLMAdapter, *,
     final_snapshot: dict[str, str] = {}
     failure_reason: str | None = None
     turn_elapsed_cumulative: list[float] = []
-    messages: list[dict] = []
-    # One raw choice per assistant turn, in order (capture_messages only).
-    raw_choices: list[dict] | None = [] if capture_messages else None
     t_start = time.monotonic()
 
     try:
@@ -138,7 +134,7 @@ async def run_trial(task: BenchTask, adapter: LLMAdapter, *,
         setup_snapshot = await sandbox.snapshot_workspace()
         prev_snapshot = dict(setup_snapshot)
 
-        messages.append({"role": "user", "content": task.get_prompt()})
+        messages = [{"role": "user", "content": task.get_prompt()}]
 
         for turn in range(1, task.max_turns + 1):
             try:
@@ -150,20 +146,12 @@ async def run_trial(task: BenchTask, adapter: LLMAdapter, *,
                 failure_reason = f"llm_error: {type(exc).__name__}: {exc}"
                 emit(type="llm_error", turn=turn, error=str(exc))
                 break
-            if capture_messages:
-                raw_choices.append(completion.raw_choice or {})
             if completion.text and completion.text.strip():
                 assistant_notes.append({"turn": turn,
                                         "text": completion.text[:4000]})
                 emit(type="note", turn=turn, text=completion.text[:200])
             if not completion.tool_calls:
                 final_text = completion.text
-                if capture_messages:
-                    # The tool-call loop never appends the final answer;
-                    # the captured history must still end with it so
-                    # raw_choices stays index-aligned with assistant turns.
-                    messages.append({"role": "assistant",
-                                     "content": completion.text})
                 break
 
             assistant_msg = {
@@ -303,8 +291,6 @@ async def run_trial(task: BenchTask, adapter: LLMAdapter, *,
         final_text=final_text,
         artifacts_dir=export_rel if artifacts else None,
         artifacts=artifacts,
-        messages_history=[dict(m) for m in messages] if capture_messages else None,
-        raw_choices=raw_choices,
     ).finalize()
 
 

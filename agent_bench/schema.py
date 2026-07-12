@@ -57,12 +57,6 @@ class BenchResult:
     # dir; artifacts are workspace-relative paths inside it.
     artifacts_dir: str | None = None
     artifacts: list[str] = field(default_factory=list)
-    # Opt-in (run_trial(capture_messages=True)): the full conversation as
-    # sent to the LLM, plus the raw `choices[0]` dict per assistant turn
-    # (index-aligned with assistant messages). For RL training consumers
-    # (ART); None on normal bench runs and omitted from the JSON output.
-    messages_history: list[dict] | None = None
-    raw_choices: list[dict] | None = None
     result_hash: str = ""
 
     def compute_hash(self) -> str:
@@ -70,8 +64,6 @@ class BenchResult:
 
         This is an integrity/identity check for corrupted or duplicated
         submissions. It is NOT a signature and does not prevent forgery.
-        messages_history/raw_choices are deliberately excluded: capturing
-        them must not change the hash of an otherwise identical run.
         """
         core = {
             "schema_version": self.schema_version,
@@ -93,14 +85,7 @@ class BenchResult:
         return self
 
     def to_dict(self) -> dict:
-        d = asdict(self)
-        # Keep result JSON byte-identical to pre-capture versions unless
-        # capture was actually requested.
-        if self.messages_history is None:
-            d.pop("messages_history")
-        if self.raw_choices is None:
-            d.pop("raw_choices")
-        return d
+        return asdict(self)
 
 
 def make_environment(
