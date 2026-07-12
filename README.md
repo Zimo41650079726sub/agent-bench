@@ -25,6 +25,25 @@ python3 cli.py --model YOUR_MODEL --task debug_python_v1 --k 3 \
     --base-url http://localhost:8080/v1
 ```
 
+Run the whole bench in one invocation:
+
+```bash
+python3 cli.py --model YOUR_MODEL --tasks all --early-stop \
+    --base-url http://localhost:8080/v1
+```
+
+- `--tasks all` (or a comma list of task ids) runs every builtin task plus
+  the bundled skills, heavy artifact tasks last, with a batch summary table
+  at the end.
+- `--early-stop` skips the remaining trials of a task after the first
+  failure — one failed trial already decides pass^k, so the repeats only
+  cost time (a failing heavyweight task can burn hours otherwise). The
+  summary records `early_stopped` and `trials_run`.
+- Sequential trials reuse one sandbox container and reset it in between
+  (processes killed, workspace wiped; tamper detection is anchored on the
+  per-trial post-reset snapshot). `--fresh-container` restores the
+  one-container-per-trial behavior.
+
 To benchmark a real skill:
 
 ```bash
@@ -109,6 +128,34 @@ capability is not monotonic in parameter count:
 - **qwen3.5-4b** drops exactly one flag across the whole bench: it edits the
   buggy file without ever running the code to observe the failure first
   (`error_interpret`), a pure process-discipline miss.
+
+## The failure-luring set — six tasks built from those failures
+
+Each failure above is deterministic enough to reproduce — so each one became
+a task designed to *provoke* it. The original six tasks saturate near the
+top (mid-size models pass everything); this second set restores a gradient,
+because every trap below is something a real model measurably fell into:
+
+| task | measured failure it targets | the trap |
+|---|---|---|
+| `big_file_edit_v1` | 12b drops `write_file`'s `path` argument and truncates when regenerating a large file | 4 surgical edits inside a ~29 KB page; anchor sentences detect truncating rewrites, `args_intact` detects the dropped argument |
+| `doc_trap_v1` | e4b reads one wrong path, then abandons the task on turn 1 (3/3 trials) | README points at a doc that does not exist; the real one is elsewhere — the first probe is guaranteed to miss |
+| `wrong_fix_trap_v1` | Tier-2 models fix without ever observing the failing test | a correct-but-suspicious-looking decoy (with a tempting TODO) sits next to the real bug; skipping pytest steers straight into it — and breaks a passing suite |
+| `tdd_strict_v1` | e2b never observes red (0/3); e4b stubs the function inside its own test file | the red phase must leave `red.log` *before* `main.py` exists (file-order check); an AST check rejects test-file stubs |
+| `tool_mirage_v1` | LFM2.5-class models copy documentation step names verbatim as tool calls | a bundled skill whose step names (`csv_summarize`, `publish_report`) look like tools; calling one trips `no_tool_hallucination` |
+| `long_procedure_v1` | small models abandon multi-step procedures, typically at a long-generation step | a 7-step pipeline with a multi-KB HTML write parked mid-way; per-step flags turn the abandonment point into a score gradient |
+
+Scoring stays fully deterministic (grep / AST / recomputed expectations —
+no LLM judge). Scores well below 1.0 are expected here; that is the point.
+
+Compare models across all 12 axes with the radar generator:
+
+```bash
+python3 scripts/make_radar.py --models modelA,modelB,modelC   # max 4
+```
+
+It writes a dark-mode HTML/SVG radar (plus the value table) from `results/`
+and prints the headless-Edge command for a PNG.
 
 ## Reading the results JSON
 
