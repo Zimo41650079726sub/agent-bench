@@ -111,12 +111,17 @@ async def run_trial(task: BenchTask, adapter: LLMAdapter, *,
                     image: str, trial_index: int, model: str,
                     environment: dict, command_timeout: float = 60.0,
                     on_event=None, export_dir: Path | None = None,
-                    export_rel: str | None = None) -> BenchResult:
+                    export_rel: str | None = None,
+                    sandbox: StatefulSandbox | None = None) -> BenchResult:
     def emit(**ev):
         if on_event:
             on_event({"trial": trial_index, **ev})
 
-    sandbox = StatefulSandbox(image=image, command_timeout=command_timeout)
+    # A caller-provided sandbox is reset and reused (container start/stop
+    # dropped from the trial); ownership — and cleanup — stay with the caller.
+    owns_sandbox = sandbox is None
+    if owns_sandbox:
+        sandbox = StatefulSandbox(image=image, command_timeout=command_timeout)
     turn_logs: list[TurnLog] = []
     assistant_notes: list[dict] = []
     final_text: str | None = None
@@ -129,10 +134,17 @@ async def run_trial(task: BenchTask, adapter: LLMAdapter, *,
 
     try:
         emit(type="trial_start")
-        await sandbox.start()
+        if owns_sandbox:
+            await sandbox.start()
+        else:
+            await sandbox.reset()
         await task.setup(sandbox)
         setup_snapshot = await sandbox.snapshot_workspace()
         prev_snapshot = dict(setup_snapshot)
+
+        # Rebase the clock now that harness prep is done: total_elapsed_sec
+        # measures the conversation + evaluation, not container/setup time.
+        t_start = time.monotonic()
 
         messages = [{"role": "user", "content": task.get_prompt()}]
 
@@ -268,7 +280,8 @@ async def run_trial(task: BenchTask, adapter: LLMAdapter, *,
         artifacts = []
         failure_reason = f"harness_error: {type(exc).__name__}: {exc}"
     finally:
-        await sandbox.cleanup()
+        if owns_sandbox:
+            await sandbox.cleanup()
 
     turns_taken = max((log.turn for log in turn_logs), default=0)
     return BenchResult(
@@ -299,12 +312,25 @@ async def run_pass_k(task: BenchTask, adapter_factory, *, k: int,
                      parallel: bool = False,
                      command_timeout: float = 60.0,
                      results_dir: str = "results",
-                     on_event=None) -> dict:
+                     on_event=None,
+                     early_stop: bool = False,
+                     reuse_container: bool = True) -> dict:
+    """Run k trials and aggregate.
+
+    early_stop: sequential mode only — one failed trial already decides
+    pass_all_k, so the remaining trials are skipped. pass_hat_k and the
+    avg_* fields are then computed over the trials actually run
+    (trials_run / early_stopped in the summary make this explicit).
+
+    reuse_container: sequential mode keeps one container alive for all k
+    trials and resets it in between (see StatefulSandbox.reset). Parallel
+    trials always get their own container.
+    """
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe_model = "".join(c if c.isalnum() or c in "._-" else "_" for c in model)
     run_name = f"{task.id}_{safe_model}_{ts}"
 
-    async def one(i: int) -> BenchResult:
+    async def one(i: int, sandbox: StatefulSandbox | None = None) -> BenchResult:
         export_rel = f"artifacts/{run_name}/trial{i}"
         return await run_trial(task, adapter_factory(), image=image,
                                trial_index=i, model=model,
@@ -312,12 +338,27 @@ async def run_pass_k(task: BenchTask, adapter_factory, *, k: int,
                                command_timeout=command_timeout,
                                on_event=on_event,
                                export_dir=Path(results_dir) / export_rel,
-                               export_rel=export_rel)
+                               export_rel=export_rel,
+                               sandbox=sandbox)
 
     if parallel:
         results = list(await asyncio.gather(*(one(i) for i in range(k))))
     else:
-        results = [await one(i) for i in range(k)]
+        shared: StatefulSandbox | None = None
+        if reuse_container:
+            shared = StatefulSandbox(image=image,
+                                     command_timeout=command_timeout)
+            await shared.start()
+        results = []
+        try:
+            for i in range(k):
+                results.append(await one(i, shared))
+                if early_stop and not results[-1].passed:
+                    break
+        finally:
+            if shared is not None:
+                await shared.cleanup()
+    n = len(results)
 
     per_skill: dict[str, dict] = {}
     for sid in results[0].skill_ids:
@@ -334,12 +375,15 @@ async def run_pass_k(task: BenchTask, adapter_factory, *, k: int,
         "task_id": task.id,
         "model": model,
         "k": k,
+        "trials_run": n,
+        "early_stopped": n < k,
         "parallel": parallel,
-        "pass_hat_k": round(sum(1 for r in results if r.passed) / k, 4),
-        "pass_all_k": all(r.passed for r in results),
-        "avg_score": round(sum(r.score for r in results) / k, 4),
-        "avg_turns": round(sum(r.turns_taken for r in results) / k, 2),
-        "avg_elapsed_sec": round(sum(r.total_elapsed_sec for r in results) / k, 2),
+        "container_reuse": reuse_container and not parallel,
+        "pass_hat_k": round(sum(1 for r in results if r.passed) / n, 4),
+        "pass_all_k": all(r.passed for r in results) and n == k,
+        "avg_score": round(sum(r.score for r in results) / n, 4),
+        "avg_turns": round(sum(r.turns_taken for r in results) / n, 2),
+        "avg_elapsed_sec": round(sum(r.total_elapsed_sec for r in results) / n, 2),
         "tamper_detected_count": sum(1 for r in results if r.tamper_detected),
         "invalid_tool_call_count": sum(r.invalid_tool_call_count for r in results),
         "skills": per_skill,
@@ -358,6 +402,9 @@ async def run_pass_k(task: BenchTask, adapter_factory, *, k: int,
 
 def print_summary(summary: dict) -> None:
     print(f"\n=== {summary['task_id']} | {summary['model']} | k={summary['k']} ===")
+    if summary.get("early_stopped"):
+        print(f"early-stopped after {summary['trials_run']}/{summary['k']} "
+              f"trials (first failure decides pass^k)")
     print(f"pass^k (all pass): {summary['pass_all_k']}   "
           f"pass rate: {summary['pass_hat_k']:.0%}")
     print(f"avg_score: {summary['avg_score']:.2f}   "

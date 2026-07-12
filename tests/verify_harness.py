@@ -9,19 +9,25 @@ Covers the pre-publication checklist from IMPLEMENTATION.md:
   D. skill_run_v1 completes with the example skill (stub applied)
   E. calling a nonexistent tool       -> no_tool_hallucination not reached
   F. `pytest || true` fake            -> self_verify not fooled
+  G. container reuse: reset() wipes workspace/procs/cwd; pass^k over one
+     shared container behaves identically to fresh containers
+  H. --early-stop: first failed trial ends the run (trials_run < k)
 
 Run from repo root:  python3 tests/verify_harness.py
 """
 
 import asyncio
 import json
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_bench.adapters import Completion, MockAdapter, ToolCall
-from agent_bench.runner import run_trial
+from agent_bench.runner import run_pass_k, run_trial
+from agent_bench.sandbox import StatefulSandbox
 from agent_bench.tasks import TaskDebugPython, TaskTDD, TaskSkillDriven
 
 IMAGE = "agent-bench:latest"
@@ -168,6 +174,72 @@ async def main() -> int:
     ok &= check("F: `|| true` does not fool self_verify",
                 not reached["self_verify"], str(reached))
     ok &= check("F: file_edit ground truth fails", not reached["file_edit"])
+
+    # --- G: container reuse / reset hygiene ------------------------------
+    sb = StatefulSandbox(image=IMAGE)
+    await sb.start()
+    await sb.write_file("/workspace/leftover.txt", "junk")
+    await sb.execute("mkdir -p sub && cd sub")
+    await sb.execute("sleep 300 & echo spawned")   # stray background process
+    await sb.reset()
+    snap = await sb.snapshot_workspace()
+    ok &= check("G: reset wipes workspace", snap == {}, str(snap))
+    ok &= check("G: reset restores cwd", sb.cwd == "/workspace", sb.cwd)
+    # /proc scan (image has no procps). Killed strays remain as zombies
+    # (PID 1 never reaps), so count only non-zombie sleeps: exactly one
+    # must survive — the PID-1 keepalive itself.
+    _, out, _ = await sb.execute(
+        'alive=0; for p in /proc/[0-9]*; do '
+        'read -r c < "$p/comm" 2>/dev/null || continue; '
+        'read -r _ _ st _ < "$p/stat" 2>/dev/null || continue; '
+        '[ "$c" = sleep ] && [ "$st" != Z ] && alive=$((alive+1)); '
+        'done; echo "ALIVE_SLEEP=$alive"')
+    ok &= check("G: reset kills stray processes (zombies excluded)",
+                "ALIVE_SLEEP=1" in out, out)
+    await sb.cleanup()
+
+    good_script = lambda: [  # noqa: E731 - same well-behaved run as A
+        call("read_file", path="main.py"),
+        call("execute_command", command="python -m pytest -q"),
+        call("write_file", path="main.py", content=FIXED_MAIN),
+        call("execute_command", command="python -m pytest -q"),
+        Completion(text="Fixed.", tool_calls=[]),
+    ]
+    tamper_script = lambda: [  # noqa: E731 - drops an unallowed file
+        call("write_file", path="junk.txt", content="scratch"),
+        call("write_file", path="main.py", content=FIXED_MAIN),
+        Completion(text="done", tool_calls=[]),
+    ]
+    tmp = tempfile.mkdtemp(prefix="agbench_verify_")
+    try:
+        scripts = [tamper_script(), good_script()]
+        summary = await run_pass_k(
+            TaskDebugPython(), lambda: MockAdapter(scripts.pop(0)),
+            k=2, image=IMAGE, model="mock", environment=ENV,
+            results_dir=tmp)
+        ok &= check("G: shared container is flagged in summary",
+                    summary["container_reuse"] is True)
+        ok &= check("G: trial 1 tamper detected under reuse",
+                    summary["trials"][0]["tamper_detected"]
+                    and not summary["trials"][0]["passed"])
+        ok &= check("G: trial 2 passes clean after reset",
+                    summary["trials"][1]["passed"],
+                    summary["trials"][1]["failure_reason"] or "")
+
+        # --- H: early stop ----------------------------------------------
+        summary = await run_pass_k(
+            TaskDebugPython(),
+            lambda: MockAdapter([Completion(text="cannot fix", tool_calls=[])]),
+            k=3, image=IMAGE, model="mock", environment=ENV,
+            results_dir=tmp, early_stop=True)
+        ok &= check("H: early stop after first failure",
+                    summary["trials_run"] == 1 and summary["early_stopped"]
+                    and not summary["pass_all_k"],
+                    f"trials_run={summary['trials_run']}")
+        ok &= check("H: full k recorded as requested",
+                    summary["k"] == 3)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
     print("\n" + ("ALL CHECKS PASSED" if ok else "SOME CHECKS FAILED"))
     return 0 if ok else 1

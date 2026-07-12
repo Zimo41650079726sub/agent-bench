@@ -173,6 +173,39 @@ class StatefulSandbox:
                 snap[path.removeprefix("./")] = digest
         return snap
 
+    async def reset(self) -> None:
+        """Return the running container to a clean state without recreating
+        it: kill every process except PID 1 (and the reset shell itself),
+        wipe /workspace and /tmp, and reset the tracked CWD.
+
+        Used by run_pass_k to reuse one container across sequential trials.
+        Integrity note: tamper detection anchors on the per-trial setup
+        snapshot taken *after* this reset, so reuse cannot mask or fake
+        violations; stray processes from the previous trial are killed here.
+
+        Killed strays linger as zombies (PID 1 is `sleep infinity`, which
+        never reaps). They hold no CPU/files — only a pid slot, bounded by
+        --pids-limit and by the container living for a single run_pass_k.
+        """
+        if not self._started:
+            raise SandboxError("reset() called before start()")
+        # /proc is scanned directly: the slim bench image ships no procps.
+        script = (
+            'for p in /proc/[0-9]*; do pid="${p#/proc/}"; '
+            'if [ "$pid" -gt 1 ] && [ "$pid" != "$$" ]; then '
+            'kill -9 "$pid" 2>/dev/null; fi; done; '
+            'find /workspace -mindepth 1 -delete 2>/dev/null; '
+            'find /tmp -mindepth 1 -delete 2>/dev/null; '
+            'true'
+        )
+        code, _, err = await _run(
+            ["docker", "exec", self.container, "bash", "-c", script],
+            timeout=self.command_timeout,
+        )
+        if code != 0:
+            raise SandboxError(f"sandbox reset failed: {err.strip()}")
+        self.cwd = "/workspace"
+
     async def cleanup(self) -> None:
         """Always called from a finally block by the runner."""
         if not self._started:
